@@ -1,9 +1,7 @@
 .simplemind-preview-host {
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 10px;
-  padding: 10px;
-  margin: 10px 0;
-  background: var(--background-primary-alt);
+  padding: 8px 0 4px;
+  margin: 8px 0;
+  box-shadow: none !important;
 }
 
 .simplemind-header {
@@ -11,7 +9,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  margin: 0 0 12px;
+  padding: 0;
 }
 
 .simplemind-title {
@@ -30,16 +29,19 @@
 }
 
 .simplemind-preview {
-  border-radius: 8px;
-  background: var(--background-primary);
-  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: #ffffff;
+  border: none;
+  box-shadow: none !important;
 }
 
 .simplemind-preview-scroll {
   overflow: auto;
-  padding: 8px;
+  padding: 12px 0;
   --simplemind-scale: 1;
   cursor: grab;
+  background: #ffffff;
+  box-shadow: none !important;
 }
 
 .simplemind-preview-svg {
@@ -85,4 +87,21 @@
 
 .simplemind-preview-scroll.is-dragging {
   cursor: grabbing;
+}
+
+.internal-embed.simplemind-preview-host {
+  box-shadow: none !important;
+}
+
+
+/* Override Obsidian embed chrome (theme border/outline) */
+.internal-embed.simplemind-preview-host,
+.markdown-rendered .internal-embed.simplemind-preview-host,
+.markdown-source-view.mod-cm6 .internal-embed.simplemind-preview-host {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
 }

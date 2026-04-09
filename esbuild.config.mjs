@@ -6,7 +6,7 @@ const isWatch = process.argv.includes("--watch");
 const context = await esbuild.context({
   entryPoints: ["src/main.ts"],
   bundle: true,
-  outfile: "main.js",
+  outfile: "dist/main.js",
   format: "cjs",
   platform: "node",
   target: "es2020",

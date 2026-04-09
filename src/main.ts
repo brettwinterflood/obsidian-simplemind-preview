@@ -7,10 +7,10 @@ import { MindMapData, SimpleMindPluginSettings } from "./types";
 
 const DEFAULT_SETTINGS: SimpleMindPluginSettings = {
   enabled: true,
-  maxPreviewHeight: 420,
-  defaultZoom: 85,
-  usePaletteColors: true,
-  templatePath: "assets/template-mindmap.smmx"
+  maxPreviewHeight: 350,
+  defaultZoom: 45,
+  nodeTheme: "pastel",
+  templatePath: ".obsidian/plugins/simplemind-preview/assets/template-mindmap.smmx"
 };
 
 type CacheItem = {
@@ -76,6 +76,12 @@ export default class SimpleMindPreviewPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+
+    // Migrate old public template path to internal plugin path.
+    if (this.settings.templatePath === "assets/template-mindmap.smmx") {
+      this.settings.templatePath = ".obsidian/plugins/simplemind-preview/assets/template-mindmap.smmx";
+      await this.saveData(this.settings);
+    }
   }
 
   async saveSettings(): Promise<void> {

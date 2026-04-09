@@ -2,6 +2,16 @@
 
 This file captures practical knowledge about SimpleMind `.smmx` files for automation, parsing, and generation in Obsidian plugins and LLM-assisted tools.
 
+## Reference Example
+
+A complete unzipped example mindmap is available at:
+
+```
+assets/finance-mindmap-dump/document/mindmap.xml
+```
+
+This is a real SimpleMind export with multiple hierarchy levels, palette colors, and layout data. Use it as ground truth when implementing parsing or rendering logic.
+
 ## What `.smmx` Is
 
 - `.smmx` is a ZIP archive, not a plain XML file.
@@ -49,9 +59,144 @@ Each node is a `<topic>` with common attributes:
 - `x`, `y`: absolute coordinates in SimpleMind canvas space
 - `text`: displayed node text
 - `textfmt`: usually `plain` or rich format marker
-- `palette` / `colorinfo`: style/color hints
+- `palette`: numeric index (1-8) into the active color palette
+- `colorinfo`: often mirrors `palette` value
 
 Layout is hierarchical by `parent` relationships, but positions are absolute.
+
+### Topic Child Elements
+
+Topics can have optional child elements:
+
+#### `<layout>`
+
+Defines layout behavior for the topic's children:
+
+```xml
+<topic id="0" parent="-1" text="Finance">
+    <layout mode="strict-horizontal" direction="auto" flow="default"></layout>
+</topic>
+```
+
+Attributes:
+- `mode`: Layout algorithm (`strict-horizontal`, `list`, etc.)
+- `direction`: Child placement direction (`auto`, etc.)
+- `flow`: Flow behavior (`default`, `auto`, etc.)
+
+#### `<style>`
+
+Per-topic style overrides:
+
+```xml
+<topic id="25" text="Security Analysis">
+    <style>
+        <font scale="1.14"></font>
+    </style>
+</topic>
+```
+
+The `<font>` child can have:
+- `scale`: Font size multiplier (e.g., `1.14` = 114% size)
+
+**Important**: The presence of `<style><font>` overrides SimpleMind's default level-based bold styling.
+
+## Color and Palette System
+
+### Style Sheet Reference
+
+The `<meta>` section contains a `<style key="...">` element that defines which palette is active:
+
+```xml
+<meta>
+  <style key="system.bright-palette"></style>
+  ...
+</meta>
+```
+
+Common built-in style keys:
+- `system.bright-palette` - Vibrant, saturated colors (most common default)
+- Other system palettes exist but are less frequently encountered
+
+### Style File Format (`.smmstyle`)
+
+SimpleMind style sheets are XML files with structure:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mindmap-colorscheme>
+
+<mindmap-colorscheme>
+    <general description="name" timestamp="...">
+        <bkgnd-color r="255" g="255" b="255"></bkgnd-color>
+        <font-color r="24" g="24" b="24"></font-color>
+    </general>
+    <style has-levels="true">
+        <mindmap connection-style="centered" natural-paths="false"></mindmap>
+        <topics borderwidth="0.25"></topics>
+        <relations>...</relations>
+        <texts align="auto" callout="none"></texts>
+    </style>
+    <palette>
+        <item>
+            <fill-color r="..." g="..." b="..."></fill-color>
+            <stroke-color r="..." g="..." b="..."></stroke-color>
+        </item>
+        <!-- 8 items total, 0-indexed in file but 1-indexed in topic palette attribute -->
+    </palette>
+</mindmap-colorscheme>
+```
+
+Each palette `<item>` has:
+- `fill-color`: Background fill (RGB values)
+- `stroke-color`: Border/line color (RGB values)
+
+Style files are stored at:
+- macOS: `~/Library/Containers/com.modelmakertools.simplemindmacpro/Data/Library/com.modelmakertools.simplemindmacpro/Mind Maps/*.smmstyle`
+
+A reference style file is available at:
+
+```
+assets/default_colors.smmstyle
+```
+
+### Palette Index Colors
+
+Topics reference colors via `palette="N"` where N is 1-8. The actual hex values depend on the active style sheet.
+
+Default palette colors (from `default_colors.smmstyle`):
+
+| Index | Color | Stroke Hex | Fill RGB |
+|-------|-------|------------|----------|
+| 1 | Blue | `#0033FF` | rgb(193, 204, 255) |
+| 2 | Red | `#FF0000` | rgb(255, 192, 180) |
+| 3 | Orange | `#FF9900` | rgb(255, 213, 149) |
+| 4 | Yellow | `#FBC02D` | rgb(255, 246, 169) |
+| 5 | Green | `#33FF00` | rgb(172, 255, 151) |
+| 6 | Cyan | `#00CCFF` | rgb(185, 241, 255) |
+| 7 | Purple | `#9900FF` | rgb(227, 185, 255) |
+| 8 | Pink | `#FF80C0` | rgb(255, 193, 224) |
+
+Note: Palette items are 0-indexed in the `.smmstyle` file but 1-indexed when referenced by `palette="N"` in topic elements.
+
+### Explicit Topic Colors
+
+Some topics may have explicit color attributes instead of or in addition to palette references:
+
+- Direct attributes: `color`, `fill`, `background`, `bgcolor`
+- Nested style elements: `<style><color hex="..."></style>`
+
+Priority for color resolution:
+1. Explicit hex color on topic (if present)
+2. Palette index lookup using active style sheet
+3. Fallback default color
+
+### Branch-Based vs Level-Based Coloring
+
+SimpleMind supports two coloring modes (defined in style sheet via `has-levels` attribute):
+- **Branch-based**: All descendants of a topic inherit the same color as their branch root
+- **Level-based**: Colors are assigned by depth level in the tree
+
+In practice, most maps use branch-based coloring where `palette` values propagate down branches.
 
 ### `relations`
 
@@ -69,14 +214,67 @@ Layout is hierarchical by `parent` relationships, but positions are absolute.
 SimpleMind text can contain escaped markers:
 
 - `\\N` represents line breaks
-- `\\*` appears in formatted text exports
+- `\\*` marks bold text boundaries (start/end)
 - HTML entities may appear in attributes (`&gt;`, etc.)
+
+### Bold Text Format
+
+Bold text can come from two sources:
+
+#### 1. Explicit `\\*` markers (inline bold)
+
+When `textfmt="rtf1"` is set on a topic, the text may contain bold markers:
+
+```xml
+<topic text="Normal \\*Bold text\\* more normal" textfmt="rtf1">
+```
+
+The `\\*` markers work as toggles:
+- First `\\*` starts bold
+- Second `\\*` ends bold
+- Can span across `\\N` line breaks
+
+Example parsing:
+- Input: `"🌍\\* Central banks\\*"`
+- Result: "🌍" (normal) + " Central banks" (bold)
+
+#### 2. Default level-based bold (implicit)
+
+SimpleMind applies bold styling by default to:
+- **Level 0**: Root/central topic (parent="-1")
+- **Level 1**: Direct children of root
+
+This is NOT stored in the XML - it's SimpleMind's default rendering behavior.
+
+#### Style Override (removes default bold)
+
+A topic with a `<style><font>` child element overrides the default bold:
+
+```xml
+<topic id="25" parent="0" text="Security Analysis" textfmt="plain">
+    <style>
+        <font scale="1.14"></font>
+    </style>
+</topic>
+```
+
+Even though this is a level-1 topic (parent="0"), the presence of `<style><font>` removes the default bold. The `scale` attribute adjusts font size but the mere presence of the element signals a style override.
+
+#### Bold Resolution Priority
+
+1. If topic has explicit `\\*` markers → use those for bold segments
+2. Else if topic has `<style><font>` child → NOT bold (override)
+3. Else if topic level is 0 or 1 → bold (default behavior)
+4. Else → not bold
 
 Safe normalization strategy for previews:
 
-- Convert `\\N` to newline or space
-- Strip `\\*` for plain display
-- Collapse repeated whitespace for node label sizing
+- Convert `\\N` to newline
+- Parse `\\*` markers to identify bold segments
+- Calculate topic level from parent hierarchy
+- Check for `<style><font>` override
+- Apply default bold to level 0-1 unless overridden
+- Render bold segments with appropriate styling (e.g., `font-weight: bold`)
 
 ## Quick Lookup for Root Topic
 
@@ -92,6 +290,24 @@ Fallback:
 
 - macOS `qlmanage` does not reliably generate previews for `.smmx` in this environment.
 - Direct XML parsing and custom SVG rendering is robust and cross-platform within Obsidian plugin runtime.
+
+### macOS App Data / Settings Paths (Observed)
+
+For the installed app `SimpleMind Pro.app`, bundle identifier resolves to:
+
+- `com.modelmakertools.simplemindmacpro`
+
+On this machine, SimpleMind data/settings-related folders were found at:
+
+- `~/Library/Containers/com.modelmakertools.simplemindmacpro`
+- `~/Library/Containers/com.modelmakertools.simplemindmacpro/Data/Library/com.modelmakertools.simplemindmacpro`
+- `~/Library/Application Scripts/com.modelmakertools.simplemindmacpro`
+
+Expected generic paths that did **not** exist here:
+
+- `~/Library/Application Support/SimpleMind`
+- `~/Library/Containers/com.modelmakertools.simplemind`
+- `~/Library/Preferences/com.modelmakertools.simplemindmacpro.plist`
 
 ## Safe Programmatic Creation Strategy
 

@@ -51,27 +51,20 @@ export class SimpleMindSettingsTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Use SimpleMind palette")
-      .setDesc("Use palette colors from the .smmx file.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.usePaletteColors).onChange(async (value) => {
-          this.plugin.settings.usePaletteColors = value;
-          await this.plugin.saveSettings();
-        })
-      );
 
     new Setting(containerEl)
-      .setName("Template path")
-      .setDesc("Vault-relative path to .smmx template used by Create new mindmap command.")
-      .addText((text) =>
-        text
-          .setPlaceholder("assets/template-mindmap.smmx")
-          .setValue(this.plugin.settings.templatePath)
-          .onChange(async (value) => {
-            this.plugin.settings.templatePath = value.trim() || "assets/template-mindmap.smmx";
+      .setName("Node theme")
+      .setDesc("Choose whether nodes render with pastel fills or outline-only style.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("pastel", "Pastel fill")
+          .addOption("outline", "Outline")
+          .setValue(this.plugin.settings.nodeTheme)
+          .onChange(async (value: "pastel" | "outline") => {
+            this.plugin.settings.nodeTheme = value;
             await this.plugin.saveSettings();
           })
       );
+
   }
 }

@@ -1,9 +1,16 @@
+export type NodeTheme = "pastel" | "outline";
+
 export interface SimpleMindPluginSettings {
   enabled: boolean;
   maxPreviewHeight: number;
   defaultZoom: number;
-  usePaletteColors: boolean;
+  nodeTheme: NodeTheme;
   templatePath: string;
+}
+
+export interface TextSegment {
+  text: string;
+  bold: boolean;
 }
 
 export interface MindTopic {
@@ -12,7 +19,10 @@ export interface MindTopic {
   x: number;
   y: number;
   text: string;
+  segments: TextSegment[];
   palette?: string;
+  sourceColor?: string;
+  level: number;
 }
 
 export interface MindRelation {
