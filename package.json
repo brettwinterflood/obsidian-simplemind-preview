@@ -1,0 +1,29 @@
+{
+  "name": "obsidian-simplemind-preview",
+  "version": "0.1.0",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --watch",
+    "build": "node esbuild.config.mjs",
+    "install-plugin": "set -a; [ -f .env ] && . ./.env; set +a; test -n \"$OBSIDIAN_VAULT_PATH\" && mkdir -p \"$OBSIDIAN_VAULT_PATH/.obsidian/plugins/simplemind-preview\" && cp main.js manifest.json styles.css \"$OBSIDIAN_VAULT_PATH/.obsidian/plugins/simplemind-preview/\" || (echo \"Set OBSIDIAN_VAULT_PATH in .env before running install-plugin\" && exit 1)",
+    "build-and-install": "npm run build && npm run install-plugin"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "simplemind"
+  ],
+  "author": "Brett Winterflood",
+  "license": "MIT",
+  "description": "Render inline previews for SimpleMind .smmx embeds.",
+  "dependencies": {
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "builtin-modules": "^5.0.0",
+    "esbuild": "^0.28.0",
+    "obsidian": "^1.12.3",
+    "typescript": "^6.0.2"
+  }
+}

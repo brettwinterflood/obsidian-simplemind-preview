@@ -1,0 +1,88 @@
+.simplemind-preview-host {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  padding: 10px;
+  margin: 10px 0;
+  background: var(--background-primary-alt);
+}
+
+.simplemind-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.simplemind-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.simplemind-open-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.simplemind-preview {
+  border-radius: 8px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+}
+
+.simplemind-preview-scroll {
+  overflow: auto;
+  padding: 8px;
+  --simplemind-scale: 1;
+  cursor: grab;
+}
+
+.simplemind-preview-svg {
+  width: auto;
+  display: block;
+  transform-origin: top left;
+  transform: scale(var(--simplemind-scale));
+}
+
+.simplemind-connector {
+  stroke: var(--text-faint);
+  stroke-width: 2;
+  fill: none;
+  opacity: 0.7;
+}
+
+.simplemind-relation {
+  stroke: var(--color-purple);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  fill: none;
+  opacity: 0.65;
+}
+
+.simplemind-label {
+  fill: var(--text-normal);
+  font-size: 13px;
+  font-family: var(--font-interface);
+  pointer-events: none;
+}
+
+.simplemind-node {
+  cursor: pointer;
+}
+
+.simplemind-zoom-layer {
+  transform-origin: top left;
+}
+
+.simplemind-error {
+  color: var(--text-error);
+}
+
+.simplemind-preview-scroll.is-dragging {
+  cursor: grabbing;
+}

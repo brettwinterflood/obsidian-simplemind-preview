@@ -1,0 +1,9 @@
+{
+  "id": "simplemind-preview",
+  "name": "SimpleMind Preview",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.11",
+  "description": "Render inline previews for SimpleMind .smmx embeds.",
+  "author": "Brett Winterflood",
+  "isDesktopOnly": true
+}
