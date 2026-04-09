@@ -389,6 +389,18 @@ const topics = Array.from(doc.querySelectorAll("topic")).map((el) => ({
 }));
 ```
 
+## Markdown export (plugin)
+
+The Obsidian plugin can copy a **markdown export** of a mindmap to the clipboard—nested headings derived from the topic tree (e.g. for use with LLMs, documentation, or other tools). Header button: **Copy as markdown**. Implementation: [`src/mindmap-markdown-export.ts`](src/mindmap-markdown-export.ts).
+
+Behavior:
+
+- Builds the tree from each topic’s `parent` id (root: `parent="-1"`).
+- Emits `# Title` using the note file’s basename (not necessarily `<title>` in XML), then **nested markdown headings** for the tree: root topics are `##`, their children `###`, and so on up to `######` (deeper levels clamp to H6). Topic labels are single-line (internal newlines collapsed to spaces).
+- **Sibling order** is deterministic: sort by `y`, then `x`, then `id` (numeric when ids are plain integers), so exports are stable even if XML sibling order varies.
+- If `relations` is non-empty, appends a `## Cross-links` section with bullet lines `Source → Target` (by topic text).
+- If there is no root (`parent="-1"`) but topics exist, falls back to a flat list of topics as consecutive `##` headings (sorted the same way).
+
 ## Caveats
 
 - This is empirical reverse-engineering for plugin usage, not an official SimpleMind spec.

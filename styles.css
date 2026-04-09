@@ -30,7 +30,8 @@
 }
 
 .simplemind-open-button,
-.simplemind-refresh-button {
+.simplemind-refresh-button,
+.simplemind-copy-markdown-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;

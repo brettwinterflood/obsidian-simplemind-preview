@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs --watch",
     "build": "node esbuild.config.mjs",
-    "install-plugin": "set -a; [ -f .env ] && . ./.env; set +a; test -n \"$OBSIDIAN_VAULT_PATH\" && mkdir -p \"$OBSIDIAN_VAULT_PATH/.obsidian/plugins/simplemind-preview\" && cp dist/main.js \"$OBSIDIAN_VAULT_PATH/.obsidian/plugins/simplemind-preview/main.js\" && cp manifest.json styles.css \"$OBSIDIAN_VAULT_PATH/.obsidian/plugins/simplemind-preview/\" || (echo \"Set OBSIDIAN_VAULT_PATH in .env before running install-plugin\" && exit 1)",
+    "install-plugin": "set -a; [ -f .env ] && . ./.env; set +a; test -n \"$OBSIDIAN_VAULT_PATH\" && mkdir -p \"$OBSIDIAN_VAULT_PATH/.obsidian/plugins/simplemind-preview/assets\" && cp dist/main.js \"$OBSIDIAN_VAULT_PATH/.obsidian/plugins/simplemind-preview/main.js\" && cp manifest.json styles.css \"$OBSIDIAN_VAULT_PATH/.obsidian/plugins/simplemind-preview/\" && cp assets/template-mindmap.smmx \"$OBSIDIAN_VAULT_PATH/.obsidian/plugins/simplemind-preview/assets/\" || (echo \"Set OBSIDIAN_VAULT_PATH in .env before running install-plugin\" && exit 1)",
     "build-and-install": "npm run build && npm run install-plugin"
   },
   "keywords": [

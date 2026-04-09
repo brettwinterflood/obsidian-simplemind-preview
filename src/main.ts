@@ -1,5 +1,19 @@
+import * as fs from "fs/promises";
+import * as path from "path";
 import JSZip from "jszip";
-import { Editor, MarkdownView, Modal, Notice, Plugin, Setting, setIcon, TFile } from "obsidian";
+import {
+  Editor,
+  FileSystemAdapter,
+  MarkdownView,
+  Modal,
+  Notice,
+  Platform,
+  Plugin,
+  Setting,
+  setIcon,
+  TFile
+} from "obsidian";
+import { exportMindMapToMarkdown } from "./mindmap-markdown-export";
 import { parseSmmx } from "./parser";
 import { renderMindMapSvg } from "./renderer";
 import { SimpleMindSettingsTab } from "./settings";
@@ -18,14 +32,34 @@ type CacheItem = {
   data: MindMapData;
 };
 
+type EmbedInteractionState = {
+  activePointers: Set<number>;
+  pendingFile: TFile | null;
+};
+
 export default class SimpleMindPreviewPlugin extends Plugin {
   settings: SimpleMindPluginSettings = DEFAULT_SETTINGS;
   private cache = new Map<string, CacheItem>();
   private cacheOrder: string[] = [];
   private cacheMax = 20;
   private livePreviewScanTimer: number | null = null;
+  /** Debounced follow-up when the user edits markdown (replaces workspace-wide MutationObserver). */
+  private editorEmbedScanTimer: number | null = null;
+  /** Debounce vault `modify` → preview refresh per path (avoids freeze on rapid saves/sync). */
+  private smmxRefreshTimers = new Map<string, number>();
+  private static readonly SMMX_VAULT_REFRESH_DEBOUNCE_MS = 450;
+  /** Active leaf / layout: scan only the focused note’s source pane. */
+  private static readonly LEAF_LAYOUT_SCAN_DEBOUNCE_MS = 120;
+  /** Typing in editor: long debounce so we do not re-parse on every keystroke. */
+  private static readonly EDITOR_EMBED_SCAN_DEBOUNCE_MS = 750;
+  /** Latest view from `editor-change` (cleared when the debounced run fires or leaf switches). */
+  private pendingEditorScanView: MarkdownView | null = null;
   /** Supersedes stale async `renderEmbed` runs when the same host is re-entered. */
   private embedRenderGen = new WeakMap<HTMLElement, number>();
+  /** Per-host pointer/drag state so refreshes do not replace DOM mid-interaction. */
+  private embedInteractionState = new WeakMap<HTMLElement, EmbedInteractionState>();
+  /** Aborts old preview-level listeners when a host is re-rendered. */
+  private embedInteractionControllers = new WeakMap<HTMLElement, AbortController>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -48,22 +82,36 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     this.registerMarkdownPostProcessor(async (el, ctx) => {
       if (!this.settings.enabled) return;
       const embeds = Array.from(el.querySelectorAll(".internal-embed"));
+      let smmxIndex = 0;
       for (const embed of embeds) {
         const src = embed.getAttribute("src");
         if (!src || !src.toLowerCase().endsWith(".smmx")) continue;
         const destination = this.app.metadataCache.getFirstLinkpathDest(src, ctx.sourcePath);
         if (!(destination instanceof TFile)) continue;
+        if (smmxIndex++ > 0) await this.yieldToMain();
         await this.renderEmbed(embed as HTMLElement, destination);
       }
     });
 
-    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.scheduleLivePreviewScan()));
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        if (this.editorEmbedScanTimer !== null) {
+          window.clearTimeout(this.editorEmbedScanTimer);
+          this.editorEmbedScanTimer = null;
+        }
+        this.pendingEditorScanView = null;
+        this.scheduleLivePreviewScan();
+      })
+    );
     this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleLivePreviewScan()));
-
-    const observerRoot = document.querySelector(".workspace") ?? document.body;
-    const observer = new MutationObserver(() => this.scheduleLivePreviewScan());
-    observer.observe(observerRoot, { childList: true, subtree: true });
-    this.register(() => observer.disconnect());
+    this.registerEvent(
+      this.app.workspace.on("editor-change", (_editor, info) => {
+        if (!this.settings.enabled) return;
+        if (!(info instanceof MarkdownView)) return;
+        if (info.getMode() !== "source") return;
+        this.scheduleEditorEmbedScan(info);
+      })
+    );
 
     this.scheduleLivePreviewScan();
 
@@ -71,7 +119,7 @@ export default class SimpleMindPreviewPlugin extends Plugin {
       this.app.vault.on("modify", (file) => {
         if (!this.settings.enabled) return;
         if (!(file instanceof TFile) || file.extension !== "smmx") return;
-        void this.refreshSmmxEmbedsForFile(file);
+        this.scheduleDebouncedSmmxVaultRefresh(file.path);
       })
     );
   }
@@ -82,6 +130,48 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     if (this.livePreviewScanTimer !== null) {
       window.clearTimeout(this.livePreviewScanTimer);
       this.livePreviewScanTimer = null;
+    }
+    if (this.editorEmbedScanTimer !== null) {
+      window.clearTimeout(this.editorEmbedScanTimer);
+      this.editorEmbedScanTimer = null;
+    }
+    for (const id of this.smmxRefreshTimers.values()) {
+      window.clearTimeout(id);
+    }
+    this.smmxRefreshTimers.clear();
+  }
+
+  /** Coalesce rapid `vault.modify` events (autosave, sync, external app) before reparsing. */
+  private scheduleDebouncedSmmxVaultRefresh(filePath: string): void {
+    const existing = this.smmxRefreshTimers.get(filePath);
+    if (existing !== undefined) {
+      window.clearTimeout(existing);
+    }
+    const timerId = window.setTimeout(() => {
+      this.smmxRefreshTimers.delete(filePath);
+      const fresh = this.app.vault.getAbstractFileByPath(filePath);
+      if (fresh instanceof TFile && fresh.extension === "smmx") {
+        this.runWhenIdle(() => this.refreshSmmxEmbedsForFile(fresh));
+      }
+    }, SimpleMindPreviewPlugin.SMMX_VAULT_REFRESH_DEBOUNCE_MS);
+    this.smmxRefreshTimers.set(filePath, timerId);
+  }
+
+  private yieldToMain(): Promise<void> {
+    return new Promise((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  }
+
+  /** Defer heavy parse/DOM so typing and layout stay responsive. */
+  private runWhenIdle(task: () => void | Promise<void>): void {
+    const run = (): void => {
+      void Promise.resolve(task());
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(run, { timeout: 1200 });
+    } else {
+      window.setTimeout(run, 0);
     }
   }
 
@@ -97,6 +187,35 @@ export default class SimpleMindPreviewPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  /** Prefer template next to `main.js` (plugin folder) on desktop; fall back to vault-relative path. */
+  private async loadTemplateBinary(): Promise<ArrayBuffer> {
+    const pluginDir = this.manifest.dir;
+    if (Platform.isDesktopApp && pluginDir) {
+      const bundled = path.join(pluginDir, "assets", "template-mindmap.smmx");
+      try {
+        const buf = await fs.readFile(bundled);
+        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+      } catch {
+        // fall through to vault path
+      }
+    }
+    return this.app.vault.adapter.readBinary(this.settings.templatePath);
+  }
+
+  /** Opens the file with the OS default app for `.smmx` (typically SimpleMind on desktop). */
+  private async openSmmxWithSystemDefaultApp(vaultPath: string): Promise<void> {
+    if (!Platform.isDesktopApp) return;
+    const adapter = this.app.vault.adapter;
+    if (!(adapter instanceof FileSystemAdapter)) return;
+    const absolutePath = adapter.getFullPath(vaultPath);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { shell } = require("electron") as { shell: { openPath: (path: string) => Promise<string> } };
+    const err = await shell.openPath(absolutePath);
+    if (err) {
+      new Notice(`Could not open ${vaultPath} externally: ${err}`);
+    }
   }
 
   private touchCache(cacheKey: string): void {
@@ -129,14 +248,73 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     const hosts = Array.from(document.querySelectorAll<HTMLElement>("[data-simplemind-rendered]")).filter(
       (el) => el.getAttribute("data-simplemind-rendered") === file.path
     );
-    for (const embedEl of hosts) {
-      await this.renderEmbed(embedEl, file);
+    for (let i = 0; i < hosts.length; i++) {
+      if (i > 0) await this.yieldToMain();
+      await this.renderEmbed(hosts[i], file);
     }
+  }
+
+  private getEmbedInteractionState(embedEl: HTMLElement): EmbedInteractionState {
+    let state = this.embedInteractionState.get(embedEl);
+    if (!state) {
+      state = {
+        activePointers: new Set<number>(),
+        pendingFile: null
+      };
+      this.embedInteractionState.set(embedEl, state);
+    }
+    return state;
+  }
+
+  private isEmbedInteracting(embedEl: HTMLElement): boolean {
+    return (this.embedInteractionState.get(embedEl)?.activePointers.size ?? 0) > 0;
+  }
+
+  private queueEmbedRefresh(embedEl: HTMLElement, file: TFile): void {
+    const state = this.getEmbedInteractionState(embedEl);
+    state.pendingFile = file;
+  }
+
+  private flushQueuedEmbedRefresh(embedEl: HTMLElement): void {
+    const state = this.embedInteractionState.get(embedEl);
+    if (!state || state.activePointers.size > 0 || !state.pendingFile) return;
+    const pendingFile = state.pendingFile;
+    state.pendingFile = null;
+    this.runWhenIdle(() => this.renderEmbed(embedEl, pendingFile));
+  }
+
+  private beginEmbedPointerInteraction(embedEl: HTMLElement, pointerId: number): void {
+    this.getEmbedInteractionState(embedEl).activePointers.add(pointerId);
+  }
+
+  private endEmbedPointerInteraction(embedEl: HTMLElement, pointerId?: number): void {
+    const state = this.embedInteractionState.get(embedEl);
+    if (!state) return;
+    if (pointerId === undefined) {
+      state.activePointers.clear();
+    } else {
+      state.activePointers.delete(pointerId);
+    }
+    if (state.activePointers.size === 0) {
+      this.flushQueuedEmbedRefresh(embedEl);
+    }
+  }
+
+  private resetEmbedInteractionController(embedEl: HTMLElement): AbortSignal {
+    this.embedInteractionControllers.get(embedEl)?.abort();
+    const controller = new AbortController();
+    this.embedInteractionControllers.set(embedEl, controller);
+    return controller.signal;
   }
 
   private async renderEmbed(embedEl: HTMLElement, file: TFile): Promise<void> {
     const gen = (this.embedRenderGen.get(embedEl) ?? 0) + 1;
     this.embedRenderGen.set(embedEl, gen);
+
+    if (this.isEmbedInteracting(embedEl)) {
+      this.queueEmbedRefresh(embedEl, file);
+      return;
+    }
 
     const stat = await this.app.vault.adapter.stat(file.path);
     if (this.embedRenderGen.get(embedEl) !== gen) return;
@@ -149,6 +327,7 @@ export default class SimpleMindPreviewPlugin extends Plugin {
       return;
     }
 
+    this.embedInteractionControllers.get(embedEl)?.abort();
     embedEl.empty();
     embedEl.addClass("simplemind-preview-host");
 
@@ -170,6 +349,8 @@ export default class SimpleMindPreviewPlugin extends Plugin {
         cls: "simplemind-refresh-button",
         text: "Refresh"
       });
+      refreshBtn.setAttr("title", "Reload the preview from disk");
+      refreshBtn.setAttr("aria-label", "Reload the preview from disk");
       setIcon(refreshBtn, "refresh-ccw");
       refreshBtn.onclick = () => {
         embedEl.removeAttribute("data-simplemind-rendered");
@@ -177,16 +358,42 @@ export default class SimpleMindPreviewPlugin extends Plugin {
         void this.renderEmbed(embedEl, file);
       };
 
+      const copyMarkdownBtn = actions.createEl("button", {
+        cls: "simplemind-copy-markdown-button",
+        text: "Copy as markdown"
+      });
+      copyMarkdownBtn.setAttr(
+        "title",
+        "Markdown export: nested heading outline of this mindmap (e.g. for LLMs or other tools)"
+      );
+      copyMarkdownBtn.setAttr(
+        "aria-label",
+        "Copy markdown export of this mindmap to the clipboard"
+      );
+      setIcon(copyMarkdownBtn, "copy");
+      copyMarkdownBtn.onclick = async () => {
+        try {
+          const map = await this.readMindMap(file);
+          const text = exportMindMapToMarkdown(map, { title: file.basename });
+          await navigator.clipboard.writeText(text);
+          new Notice("Copied markdown export to clipboard");
+        } catch {
+          new Notice("Copy failed");
+        }
+      };
+
       const button = actions.createEl("button", {
         cls: "simplemind-open-button",
         text: "Open in SimpleMind"
       });
+      button.setAttr("title", "Open this file in SimpleMind Pro");
+      button.setAttr("aria-label", "Open this file in SimpleMind Pro");
       setIcon(button, "external-link");
       button.onclick = async () => this.openInSimpleMind(file);
 
       const preview = embedEl.createDiv({ cls: "simplemind-preview" });
       preview.innerHTML = renderMindMapSvg(map, this.settings);
-      this.attachZoomInteractions(preview, file);
+      this.attachZoomInteractions(embedEl, preview, file);
 
       embedEl.setAttribute("data-simplemind-rendered", file.path);
       embedEl.setAttribute("data-simplemind-mtime", String(mtimeForAttr));
@@ -196,9 +403,10 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     }
   }
 
-  private attachZoomInteractions(previewEl: HTMLElement, file: TFile): void {
+  private attachZoomInteractions(embedEl: HTMLElement, previewEl: HTMLElement, file: TFile): void {
     const scrollEl = previewEl.querySelector(".simplemind-preview-scroll") as HTMLElement | null;
     if (!scrollEl) return;
+    const listenerSignal = this.resetEmbedInteractionController(embedEl);
 
     // Intercept default embed opening; open SimpleMind only when a node is clicked.
     previewEl.addEventListener(
@@ -209,7 +417,7 @@ export default class SimpleMindPreviewPlugin extends Plugin {
         event.preventDefault();
         event.stopPropagation();
       },
-      true
+      { capture: true, signal: listenerSignal }
     );
 
     previewEl.addEventListener(
@@ -223,7 +431,7 @@ export default class SimpleMindPreviewPlugin extends Plugin {
           void this.openInSimpleMind(file);
         }
       },
-      true
+      { capture: true, signal: listenerSignal }
     );
 
     const getScale = (): number => {
@@ -286,8 +494,18 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     let originScrollLeft = 0;
     let originScrollTop = 0;
 
+    const forceEndInteraction = (pointerId?: number): void => {
+      isDragging = false;
+      if (pointerId !== undefined && scrollEl.hasPointerCapture(pointerId)) {
+        scrollEl.releasePointerCapture(pointerId);
+      }
+      scrollEl.removeClass("is-dragging");
+      this.endEmbedPointerInteraction(embedEl, pointerId);
+    };
+
     scrollEl.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
+      this.beginEmbedPointerInteraction(embedEl, event.pointerId);
       const target = event.target as HTMLElement | null;
       if (target?.closest(".simplemind-node")) {
         return;
@@ -299,15 +517,10 @@ export default class SimpleMindPreviewPlugin extends Plugin {
       originScrollTop = scrollEl.scrollTop;
       scrollEl.setPointerCapture(event.pointerId);
       scrollEl.addClass("is-dragging");
-    });
+    }, { signal: listenerSignal });
 
     const endDrag = (event: PointerEvent): void => {
-      if (!isDragging) return;
-      isDragging = false;
-      if (scrollEl.hasPointerCapture(event.pointerId)) {
-        scrollEl.releasePointerCapture(event.pointerId);
-      }
-      scrollEl.removeClass("is-dragging");
+      forceEndInteraction(event.pointerId);
     };
 
     scrollEl.addEventListener("pointermove", (event) => {
@@ -317,14 +530,24 @@ export default class SimpleMindPreviewPlugin extends Plugin {
       scrollEl.scrollLeft = originScrollLeft - dx;
       scrollEl.scrollTop = originScrollTop - dy;
       clampToBounds();
-    });
+    }, { signal: listenerSignal });
 
-    scrollEl.addEventListener("pointerup", endDrag);
-    scrollEl.addEventListener("pointercancel", endDrag);
-    scrollEl.addEventListener("scroll", clampToBounds);
+    scrollEl.addEventListener("pointerup", endDrag, { signal: listenerSignal });
+    scrollEl.addEventListener("pointercancel", endDrag, { signal: listenerSignal });
+    scrollEl.addEventListener("lostpointercapture", (event) => {
+      forceEndInteraction((event as PointerEvent).pointerId);
+    }, { signal: listenerSignal });
+    scrollEl.addEventListener("scroll", clampToBounds, { signal: listenerSignal });
+    window.addEventListener("blur", () => forceEndInteraction(), { signal: listenerSignal });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") {
+        forceEndInteraction();
+      }
+    }, { signal: listenerSignal });
 
     const resizeObserver = new ResizeObserver(() => clampToBounds());
     resizeObserver.observe(scrollEl);
+    listenerSignal.addEventListener("abort", () => resizeObserver.disconnect(), { once: true });
     this.register(() => resizeObserver.disconnect());
 
     window.requestAnimationFrame(() => {
@@ -339,23 +562,47 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     }
     this.livePreviewScanTimer = window.setTimeout(() => {
       this.livePreviewScanTimer = null;
-      void this.renderLivePreviewEmbeds();
-    }, 120);
+      this.runWhenIdle(() => this.renderActiveMarkdownSourceEmbeds());
+    }, SimpleMindPreviewPlugin.LEAF_LAYOUT_SCAN_DEBOUNCE_MS);
   }
 
-  private async renderLivePreviewEmbeds(): Promise<void> {
-    const sourceViewEmbeds = Array.from(
-      document.querySelectorAll<HTMLElement>(".markdown-source-view.mod-cm6 .internal-embed")
-    ).filter((el) => {
+  private scheduleEditorEmbedScan(view: MarkdownView): void {
+    if (!this.settings.enabled) return;
+    this.pendingEditorScanView = view;
+    if (this.editorEmbedScanTimer !== null) {
+      window.clearTimeout(this.editorEmbedScanTimer);
+    }
+    this.editorEmbedScanTimer = window.setTimeout(() => {
+      this.editorEmbedScanTimer = null;
+      const target = this.pendingEditorScanView;
+      this.pendingEditorScanView = null;
+      if (target) {
+        this.runWhenIdle(() => this.renderLivePreviewEmbedsForMarkdownView(target));
+      }
+    }, SimpleMindPreviewPlugin.EDITOR_EMBED_SCAN_DEBOUNCE_MS);
+  }
+
+  private async renderActiveMarkdownSourceEmbeds(): Promise<void> {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view || view.getMode() !== "source") return;
+    await this.renderLivePreviewEmbedsForMarkdownView(view);
+  }
+
+  private async renderLivePreviewEmbedsForMarkdownView(view: MarkdownView): Promise<void> {
+    const root = view.containerEl.querySelector<HTMLElement>(".markdown-source-view.mod-cm6");
+    if (!root) return;
+
+    const sourceViewEmbeds = Array.from(root.querySelectorAll<HTMLElement>(".internal-embed")).filter((el) => {
       const src = el.getAttribute("src");
       return src?.toLowerCase().endsWith(".smmx") ?? false;
     });
     if (sourceViewEmbeds.length === 0) return;
 
-    const activeFile = this.app.workspace.getActiveFile();
-    const sourcePath = activeFile?.path ?? "";
+    const sourcePath = view.file?.path ?? "";
 
-    for (const embed of sourceViewEmbeds) {
+    for (let i = 0; i < sourceViewEmbeds.length; i++) {
+      if (i > 0) await this.yieldToMain();
+      const embed = sourceViewEmbeds[i];
       const src = embed.getAttribute("src");
       if (!src) continue;
       const destination = this.app.metadataCache.getFirstLinkpathDest(src, sourcePath);
@@ -443,7 +690,7 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     }
 
     try {
-      const templateBinary = await this.app.vault.adapter.readBinary(this.settings.templatePath);
+      const templateBinary = await this.loadTemplateBinary();
       const zip = await JSZip.loadAsync(templateBinary);
       const xmlFile = zip.file("document/mindmap.xml");
       if (!xmlFile) {
@@ -465,6 +712,7 @@ export default class SimpleMindPreviewPlugin extends Plugin {
 
       editor.replaceSelection(`![[${cleanName}.smmx]]`);
       new Notice(`Created ${cleanName}.smmx`);
+      await this.openSmmxWithSystemDefaultApp(targetPath);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       new Notice(`Failed to create mindmap: ${message}`);

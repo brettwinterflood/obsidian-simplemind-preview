@@ -11,7 +11,7 @@ Whenever you change source files that affect the plugin (`src/`, `styles.css`, `
 npm run build-and-install
 ```
 
-from the repository root. This runs `npm run build` and copies `dist/main.js`, `manifest.json`, and `styles.css` into the vault plugin folder (requires `OBSIDIAN_VAULT_PATH` in `.env` for the install step).
+from the repository root. This runs `npm run build` and copies `dist/main.js`, `manifest.json`, `styles.css`, and `assets/template-mindmap.smmx` (into `assets/` next to `main.js`) into the vault plugin folder (requires `OBSIDIAN_VAULT_PATH` in `.env` for the install step).
 
 If the install step fails because the env var is missing, still run `npm run build` so the bundle is verified, and note that the user should set `OBSIDIAN_VAULT_PATH` to install into a vault.
 
