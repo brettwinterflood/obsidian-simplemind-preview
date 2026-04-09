@@ -180,22 +180,83 @@ function buildConnector(from: MindTopic, to: MindTopic, offsetX: number, offsetY
   return `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`;
 }
 
+/** Axis-aligned rects centered on (ax, ay) and (bx, by). */
+function rectsOverlap2D(
+  ax: number,
+  ay: number,
+  aw: number,
+  ah: number,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number
+): boolean {
+  const dx = Math.abs(ax - bx);
+  const dy = Math.abs(ay - by);
+  return dx < (aw + bw) / 2 && dy < (ah + bh) / 2;
+}
+
+function anyScaledNodesOverlap(
+  topics: MindTopic[],
+  dims: { width: number; height: number }[],
+  s: number
+): boolean {
+  const n = topics.length;
+  for (let i = 0; i < n; i++) {
+    const wi = dims[i].width * s;
+    const hi = dims[i].height * s;
+    for (let j = i + 1; j < n; j++) {
+      const wj = dims[j].width * s;
+      const hj = dims[j].height * s;
+      if (rectsOverlap2D(topics[i].x, topics[i].y, wi, hi, topics[j].x, topics[j].y, wj, hj)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * SimpleMind (x,y) are fixed; larger wrapped labels need smaller draw scale so boxes do not overlap.
+ * Uniform scale about each topic center preserves connectors (still use center points).
+ */
+function maxNonOverlappingNodeScale(topics: MindTopic[], dims: { width: number; height: number }[]): number {
+  if (topics.length <= 1) return 1;
+  if (!anyScaledNodesOverlap(topics, dims, 1)) return 1;
+  const sFloor = 0.03;
+  let lo = sFloor;
+  let hi = 1;
+  for (let iter = 0; iter < 56; iter++) {
+    const mid = (lo + hi) / 2;
+    if (!anyScaledNodesOverlap(topics, dims, mid)) lo = mid;
+    else hi = mid;
+  }
+  return Math.max(sFloor, lo);
+}
+
 export function renderMindMapSvg(data: MindMapData, settings: SimpleMindPluginSettings): string {
   if (data.topics.length === 0) {
     return `<div class="simplemind-empty">No topics found.</div>`;
   }
+
+  const layouts = data.topics.map((topic) => calcNodeDimensions(topic.segments));
+  const dimBoxes = layouts.map((l) => ({ width: l.width, height: l.height }));
+  const nodeScale = maxNonOverlappingNodeScale(data.topics, dimBoxes);
 
   let minLeft = Number.POSITIVE_INFINITY;
   let minTop = Number.POSITIVE_INFINITY;
   let maxRight = Number.NEGATIVE_INFINITY;
   let maxBottom = Number.NEGATIVE_INFINITY;
 
-  for (const topic of data.topics) {
-    const { width: nodeWidth, height: nodeHeight } = calcNodeDimensions(topic.segments);
-    const left = topic.x - nodeWidth / 2;
-    const top = topic.y - nodeHeight / 2;
-    const right = left + nodeWidth;
-    const bottom = top + nodeHeight;
+  for (let i = 0; i < data.topics.length; i++) {
+    const topic = data.topics[i];
+    const { width: nodeWidth, height: nodeHeight } = layouts[i];
+    const w = nodeWidth * nodeScale;
+    const h = nodeHeight * nodeScale;
+    const left = topic.x - w / 2;
+    const top = topic.y - h / 2;
+    const right = left + w;
+    const bottom = top + h;
     minLeft = Math.min(minLeft, left);
     minTop = Math.min(minTop, top);
     maxRight = Math.max(maxRight, right);
@@ -231,18 +292,18 @@ export function renderMindMapSvg(data: MindMapData, settings: SimpleMindPluginSe
     .join("");
 
   const nodes = data.topics
-    .map((topic) => {
+    .map((topic, index) => {
       const x = topic.x + offsetX;
       const y = topic.y + offsetY;
-      const { width: nodeWidth, height: nodeHeight, lines } = calcNodeDimensions(topic.segments);
+      const { width: nodeWidth, height: nodeHeight, lines } = layouts[index];
       const left = x - nodeWidth / 2;
       const top = y - nodeHeight / 2;
       const baseColor = getTopicColor(topic);
       const textStartY = y - ((lines.length - 1) * LINE_HEIGHT) / 2;
 
       const textLines = lines
-        .map((line, index) => {
-          const dy = index === 0 ? 0 : LINE_HEIGHT;
+        .map((line, lineIndex) => {
+          const dy = lineIndex === 0 ? 0 : LINE_HEIGHT;
           const segmentSpans = line.segments
             .map((seg) => {
               const escaped = escapeHtml(seg.text);
@@ -256,10 +317,14 @@ export function renderMindMapSvg(data: MindMapData, settings: SimpleMindPluginSe
       const fill = settings.nodeTheme === "pastel" ? toPastelHex(baseColor) : "#ffffff";
       const strokeWidth = settings.nodeTheme === "pastel" ? 1.6 : 2;
 
+      const tf = `translate(${x} ${y}) scale(${nodeScale}) translate(${-x} ${-y})`;
+
       return `
-        <g class="simplemind-node" data-topic-id="${escapeHtml(topic.id)}">
-          <rect x="${left}" y="${top}" width="${nodeWidth}" height="${nodeHeight}" rx="10" ry="10" fill="${fill}" opacity="1" stroke="${baseColor}" stroke-width="${strokeWidth}"></rect>
-          <text x="${x}" y="${textStartY}" text-anchor="middle" class="simplemind-label">${textLines}</text>
+        <g transform="${tf}">
+          <g class="simplemind-node" data-topic-id="${escapeHtml(topic.id)}">
+            <rect vector-effect="non-scaling-stroke" x="${left}" y="${top}" width="${nodeWidth}" height="${nodeHeight}" rx="10" ry="10" fill="${fill}" opacity="1" stroke="${baseColor}" stroke-width="${strokeWidth}"></rect>
+            <text x="${x}" y="${textStartY}" text-anchor="middle" class="simplemind-label">${textLines}</text>
+          </g>
         </g>
       `;
     })
