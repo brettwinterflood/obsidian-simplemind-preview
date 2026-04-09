@@ -2,7 +2,7 @@
 
 Render inline previews for SimpleMind `.smmx` embeds in Obsidian.
 
-SimpleMind Preview screenshot
+![SimpleMind Preview screenshot](./screenshot.png)
 
 Left: SimpleMind Mac app vs Right: Obsidian SimpleMind Preview Plugin
 
