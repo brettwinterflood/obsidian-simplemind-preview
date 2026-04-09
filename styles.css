@@ -13,6 +13,13 @@
   padding: 0;
 }
 
+.simplemind-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .simplemind-title {
   font-weight: 600;
   font-size: 0.95rem;
@@ -22,7 +29,8 @@
   text-overflow: ellipsis;
 }
 
-.simplemind-open-button {
+.simplemind-open-button,
+.simplemind-refresh-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -35,6 +43,11 @@
   box-shadow: none !important;
 }
 
+.simplemind-map-layout {
+  display: block;
+  flex-shrink: 0;
+}
+
 .simplemind-preview-scroll {
   overflow: auto;
   padding: 12px 0;
@@ -45,10 +58,9 @@
 }
 
 .simplemind-preview-svg {
-  width: auto;
+  width: 100%;
+  height: 100%;
   display: block;
-  transform-origin: top left;
-  transform: scale(var(--simplemind-scale));
 }
 
 .simplemind-connector {
@@ -71,14 +83,14 @@
   font-size: 13px;
   font-family: var(--font-interface);
   pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .simplemind-node {
   cursor: pointer;
-}
-
-.simplemind-zoom-layer {
-  transform-origin: top left;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .simplemind-error {
@@ -92,7 +104,6 @@
 .internal-embed.simplemind-preview-host {
   box-shadow: none !important;
 }
-
 
 /* Override Obsidian embed chrome (theme border/outline) */
 .internal-embed.simplemind-preview-host,

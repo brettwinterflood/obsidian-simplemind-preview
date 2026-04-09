@@ -1,0 +1,18 @@
+---
+description: After substantive code or style changes, run build-and-install to verify and sync the plugin into the vault.
+alwaysApply: true
+---
+
+# Build and install after changes
+
+Whenever you change source files that affect the plugin (`src/`, `styles.css`, `manifest.json`, or build config), finish by running:
+
+```bash
+npm run build-and-install
+```
+
+from the repository root. This runs `npm run build` and copies `dist/main.js`, `manifest.json`, and `styles.css` into the vault plugin folder (requires `OBSIDIAN_VAULT_PATH` in `.env` for the install step).
+
+If the install step fails because the env var is missing, still run `npm run build` so the bundle is verified, and note that the user should set `OBSIDIAN_VAULT_PATH` to install into a vault.
+
+Do not consider the task complete for user-facing plugin work until `npm run build` succeeds (and `build-and-install` when the vault path is configured).

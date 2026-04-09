@@ -24,6 +24,8 @@ export default class SimpleMindPreviewPlugin extends Plugin {
   private cacheOrder: string[] = [];
   private cacheMax = 20;
   private livePreviewScanTimer: number | null = null;
+  /** Supersedes stale async `renderEmbed` runs when the same host is re-entered. */
+  private embedRenderGen = new WeakMap<HTMLElement, number>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -58,11 +60,20 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.scheduleLivePreviewScan()));
     this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleLivePreviewScan()));
 
+    const observerRoot = document.querySelector(".workspace") ?? document.body;
     const observer = new MutationObserver(() => this.scheduleLivePreviewScan());
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(observerRoot, { childList: true, subtree: true });
     this.register(() => observer.disconnect());
 
     this.scheduleLivePreviewScan();
+
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (!this.settings.enabled) return;
+        if (!(file instanceof TFile) || file.extension !== "smmx") return;
+        void this.refreshSmmxEmbedsForFile(file);
+      })
+    );
   }
 
   onunload(): void {
@@ -114,22 +125,59 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     return data;
   }
 
+  private async refreshSmmxEmbedsForFile(file: TFile): Promise<void> {
+    const hosts = Array.from(document.querySelectorAll<HTMLElement>("[data-simplemind-rendered]")).filter(
+      (el) => el.getAttribute("data-simplemind-rendered") === file.path
+    );
+    for (const embedEl of hosts) {
+      await this.renderEmbed(embedEl, file);
+    }
+  }
+
   private async renderEmbed(embedEl: HTMLElement, file: TFile): Promise<void> {
-    if (embedEl.getAttribute("data-simplemind-rendered") === file.path) {
+    const gen = (this.embedRenderGen.get(embedEl) ?? 0) + 1;
+    this.embedRenderGen.set(embedEl, gen);
+
+    const stat = await this.app.vault.adapter.stat(file.path);
+    if (this.embedRenderGen.get(embedEl) !== gen) return;
+
+    const currentMtime = stat?.mtime ?? 0;
+    if (
+      embedEl.getAttribute("data-simplemind-rendered") === file.path &&
+      embedEl.getAttribute("data-simplemind-mtime") === String(currentMtime)
+    ) {
       return;
     }
 
     embedEl.empty();
     embedEl.addClass("simplemind-preview-host");
-    embedEl.setAttribute("data-simplemind-rendered", file.path);
 
     try {
       const map = await this.readMindMap(file);
+      if (this.embedRenderGen.get(embedEl) !== gen) return;
+
+      const statAfter = await this.app.vault.adapter.stat(file.path);
+      if (this.embedRenderGen.get(embedEl) !== gen) return;
+
+      const mtimeForAttr = statAfter?.mtime ?? 0;
+
       const header = embedEl.createDiv({ cls: "simplemind-header" });
       const title = header.createDiv({ cls: "simplemind-title", text: file.basename });
       title.setAttr("title", file.path);
 
-      const button = header.createEl("button", {
+      const actions = header.createDiv({ cls: "simplemind-header-actions" });
+      const refreshBtn = actions.createEl("button", {
+        cls: "simplemind-refresh-button",
+        text: "Refresh"
+      });
+      setIcon(refreshBtn, "refresh-ccw");
+      refreshBtn.onclick = () => {
+        embedEl.removeAttribute("data-simplemind-rendered");
+        embedEl.removeAttribute("data-simplemind-mtime");
+        void this.renderEmbed(embedEl, file);
+      };
+
+      const button = actions.createEl("button", {
         cls: "simplemind-open-button",
         text: "Open in SimpleMind"
       });
@@ -139,6 +187,9 @@ export default class SimpleMindPreviewPlugin extends Plugin {
       const preview = embedEl.createDiv({ cls: "simplemind-preview" });
       preview.innerHTML = renderMindMapSvg(map, this.settings);
       this.attachZoomInteractions(preview, file);
+
+      embedEl.setAttribute("data-simplemind-rendered", file.path);
+      embedEl.setAttribute("data-simplemind-mtime", String(mtimeForAttr));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       embedEl.createDiv({ cls: "simplemind-error", text: `Failed to preview ${file.name}: ${message}` });
@@ -184,6 +235,13 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     const setScale = (nextScale: number): void => {
       const clamped = Math.max(0.2, Math.min(3, nextScale));
       scrollEl.style.setProperty("--simplemind-scale", clamped.toFixed(3));
+      const layoutEl = scrollEl.querySelector(".simplemind-map-layout") as HTMLElement | null;
+      const mapWidth = Number.parseFloat(scrollEl.getAttribute("data-map-width") ?? "");
+      const mapHeight = Number.parseFloat(scrollEl.getAttribute("data-map-height") ?? "");
+      if (layoutEl && Number.isFinite(mapWidth) && Number.isFinite(mapHeight)) {
+        layoutEl.style.width = `${mapWidth * clamped}px`;
+        layoutEl.style.height = `${mapHeight * clamped}px`;
+      }
       clampToBounds();
     };
 
@@ -287,8 +345,11 @@ export default class SimpleMindPreviewPlugin extends Plugin {
 
   private async renderLivePreviewEmbeds(): Promise<void> {
     const sourceViewEmbeds = Array.from(
-      document.querySelectorAll<HTMLElement>(".markdown-source-view.mod-cm6 .internal-embed[src$='.smmx']")
-    );
+      document.querySelectorAll<HTMLElement>(".markdown-source-view.mod-cm6 .internal-embed")
+    ).filter((el) => {
+      const src = el.getAttribute("src");
+      return src?.toLowerCase().endsWith(".smmx") ?? false;
+    });
     if (sourceViewEmbeds.length === 0) return;
 
     const activeFile = this.app.workspace.getActiveFile();

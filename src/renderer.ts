@@ -87,13 +87,84 @@ function parseSegmentsIntoLines(segments: TextSegment[]): ParsedLine[] {
   return filtered.length > 0 ? filtered : [{ segments: [{ text: "(untitled)", bold: false }], plainText: "(untitled)" }];
 }
 
+/** ~px per Latin character at 13px UI font (matches simplemind-label). */
+const APPROX_CHAR_WIDTH = 7.5;
+const NODE_H_PAD = 24;
+const MAX_NODE_WIDTH = 400;
+const MIN_NODE_WIDTH = 100;
+const LINE_HEIGHT = 18;
+const VERTICAL_PAD = 20;
+
+/** Wrap a single line of text to fit a max character width (word-aware, hard-breaks long tokens). */
+function wrapPlainRowToRows(text: string, maxChars: number): string[] {
+  const t = text.trim();
+  if (t.length === 0) return [];
+  if (maxChars < 8) return [t];
+  if (t.length <= maxChars) return [t];
+
+  const rows: string[] = [];
+  const words = t.split(/(\s+)/);
+  let row = "";
+
+  const flushRow = (): void => {
+    const trimmed = row.trim();
+    if (trimmed.length > 0) rows.push(trimmed);
+    row = "";
+  };
+
+  for (const word of words) {
+    if (word.length === 0) continue;
+    const candidate = row + word;
+    if (candidate.length <= maxChars) {
+      row = candidate;
+      continue;
+    }
+    flushRow();
+    if (word.length <= maxChars) {
+      row = word;
+      continue;
+    }
+    // Single token longer than max: hard-break
+    let rest = word;
+    while (rest.length > maxChars) {
+      rows.push(rest.slice(0, maxChars));
+      rest = rest.slice(maxChars);
+    }
+    row = rest;
+  }
+  flushRow();
+  return rows.length > 0 ? rows : [t];
+}
+
+/** After manual newlines, split long lines so they fit the node width. */
+function expandLinesWithWordWrap(lines: ParsedLine[], maxChars: number): ParsedLine[] {
+  const out: ParsedLine[] = [];
+  for (const line of lines) {
+    const rows = wrapPlainRowToRows(line.plainText, maxChars);
+    if (rows.length === 0) continue;
+    const defaultBold = line.segments.some((s) => s.bold);
+    for (const row of rows) {
+      out.push({
+        segments: [{ text: row, bold: defaultBold }],
+        plainText: row
+      });
+    }
+  }
+  return out.length > 0 ? out : lines;
+}
+
 function calcNodeDimensions(segments: TextSegment[]): { width: number; height: number; lines: ParsedLine[] } {
-  const lines = parseSegmentsIntoLines(segments);
-  const longestLineLength = lines.reduce((max, line) => Math.max(max, line.plainText.length), 0);
-  const width = Math.max(100, Math.min(400, longestLineLength * 7.5 + 24));
-  const lineHeight = 18;
-  const verticalPadding = 16;
-  const height = Math.max(38, lines.length * lineHeight + verticalPadding);
+  const manualLines = parseSegmentsIntoLines(segments);
+  const innerBudget = MAX_NODE_WIDTH - NODE_H_PAD;
+  const maxCharsPerRow = Math.max(8, Math.floor(innerBudget / APPROX_CHAR_WIDTH));
+  const lines = expandLinesWithWordWrap(manualLines, maxCharsPerRow);
+
+  const longestRowChars = lines.reduce((max, line) => Math.max(max, line.plainText.length), 0);
+  const width = Math.max(
+    MIN_NODE_WIDTH,
+    Math.min(MAX_NODE_WIDTH, longestRowChars * APPROX_CHAR_WIDTH + NODE_H_PAD)
+  );
+  const height = Math.max(38, lines.length * LINE_HEIGHT + VERTICAL_PAD);
 
   return { width, height, lines };
 }
@@ -167,12 +238,11 @@ export function renderMindMapSvg(data: MindMapData, settings: SimpleMindPluginSe
       const left = x - nodeWidth / 2;
       const top = y - nodeHeight / 2;
       const baseColor = getTopicColor(topic);
-      const lineHeight = 18;
-      const textStartY = y - ((lines.length - 1) * lineHeight) / 2 + 5;
-      
+      const textStartY = y - ((lines.length - 1) * LINE_HEIGHT) / 2;
+
       const textLines = lines
         .map((line, index) => {
-          const dy = index === 0 ? 0 : lineHeight;
+          const dy = index === 0 ? 0 : LINE_HEIGHT;
           const segmentSpans = line.segments
             .map((seg) => {
               const escaped = escapeHtml(seg.text);
@@ -196,16 +266,20 @@ export function renderMindMapSvg(data: MindMapData, settings: SimpleMindPluginSe
     .join("");
 
   const scale = Math.max(0.2, settings.defaultZoom / 100);
+  const layoutW = width * scale;
+  const layoutH = height * scale;
 
   return `
     <div class="simplemind-preview-scroll" data-main-x="${mainX.toFixed(2)}" data-main-y="${mainY.toFixed(2)}" data-map-width="${width.toFixed(2)}" data-map-height="${height.toFixed(2)}" style="max-height: ${settings.maxPreviewHeight}px; --simplemind-scale: ${scale};">
-      <svg class="simplemind-preview-svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMinYMin meet">
-        <g class="simplemind-zoom-layer">
-          ${connectors}
-          ${relationLines}
-          ${nodes}
-        </g>
-      </svg>
+      <div class="simplemind-map-layout" style="width: ${layoutW}px; height: ${layoutH}px;">
+        <svg class="simplemind-preview-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMin meet">
+          <g class="simplemind-zoom-layer">
+            ${connectors}
+            ${relationLines}
+            ${nodes}
+          </g>
+        </svg>
+      </div>
     </div>
   `;
 }
