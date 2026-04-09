@@ -1,0 +1,57 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mindmap-colorscheme>
+
+<mindmap-colorscheme>
+    <general description="test" timestamp="2026-04-09+11:31:35">
+        <bkgnd-color r="255" g="255" b="255"></bkgnd-color>
+        <font-color r="24" g="24" b="24"></font-color>
+    </general>
+    <style has-levels="true">
+        <mindmap connection-style="centered" natural-paths="false"></mindmap>
+        <topics borderwidth="0.25"></topics>
+        <relations>
+            <cross-links line-style="penWideCable" path-style="bezier" source-arrow="none" target-arrow="singleArrow"></cross-links>
+            <hierarchical-relations line-width="2.00">
+                <levels>
+                    <level line-width="2.00"></level>
+                    <level line-width="2.00"></level>
+                </levels>
+            </hierarchical-relations>
+        </relations>
+        <texts align="auto" callout="none"></texts>
+    </style>
+    <palette>
+        <item>
+            <fill-color r="193" g="204" b="255"></fill-color>
+            <stroke-color r="0" g="51" b="255"></stroke-color>
+        </item>
+        <item>
+            <fill-color r="255" g="192" b="180"></fill-color>
+            <stroke-color r="255" g="0" b="0"></stroke-color>
+        </item>
+        <item>
+            <fill-color r="255" g="213" b="149"></fill-color>
+            <stroke-color r="255" g="153" b="0"></stroke-color>
+        </item>
+        <item>
+            <fill-color r="255" g="246" b="169"></fill-color>
+            <stroke-color r="251" g="192" b="45"></stroke-color>
+        </item>
+        <item>
+            <fill-color r="172" g="255" b="151"></fill-color>
+            <stroke-color r="51" g="255" b="0"></stroke-color>
+        </item>
+        <item>
+            <fill-color r="185" g="241" b="255"></fill-color>
+            <stroke-color r="0" g="204" b="255"></stroke-color>
+        </item>
+        <item>
+            <fill-color r="227" g="185" b="255"></fill-color>
+            <stroke-color r="153" g="0" b="255"></stroke-color>
+        </item>
+        <item>
+            <fill-color r="255" g="193" b="224"></fill-color>
+            <stroke-color r="255" g="128" b="192"></stroke-color>
+        </item>
+    </palette>
+</mindmap-colorscheme>
