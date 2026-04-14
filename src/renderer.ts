@@ -201,17 +201,36 @@ function anyScaledNodesOverlap(
   dims: { width: number; height: number }[],
   s: number
 ): boolean {
-  const n = topics.length;
-  for (let i = 0; i < n; i++) {
-    const wi = dims[i].width * s;
-    const hi = dims[i].height * s;
-    for (let j = i + 1; j < n; j++) {
-      const wj = dims[j].width * s;
-      const hj = dims[j].height * s;
-      if (rectsOverlap2D(topics[i].x, topics[i].y, wi, hi, topics[j].x, topics[j].y, wj, hj)) {
+  if (topics.length <= 1) return false;
+
+  const rects = topics
+    .map((topic, index) => {
+      const width = dims[index].width * s;
+      const height = dims[index].height * s;
+      const left = topic.x - width / 2;
+      const right = topic.x + width / 2;
+      const top = topic.y - height / 2;
+      const bottom = topic.y + height / 2;
+      return { x: topic.x, y: topic.y, width, height, left, right, top, bottom };
+    })
+    .sort((a, b) => a.left - b.left);
+
+  const active: typeof rects = [];
+  for (const rect of rects) {
+    for (let i = active.length - 1; i >= 0; i--) {
+      if (active[i].right <= rect.left) {
+        active.splice(i, 1);
+      }
+    }
+
+    for (const other of active) {
+      if (other.bottom <= rect.top || other.top >= rect.bottom) continue;
+      if (rectsOverlap2D(rect.x, rect.y, rect.width, rect.height, other.x, other.y, other.width, other.height)) {
         return true;
       }
     }
+
+    active.push(rect);
   }
   return false;
 }
@@ -226,7 +245,7 @@ function maxNonOverlappingNodeScale(topics: MindTopic[], dims: { width: number; 
   const sFloor = 0.03;
   let lo = sFloor;
   let hi = 1;
-  for (let iter = 0; iter < 56; iter++) {
+  for (let iter = 0; iter < 18; iter++) {
     const mid = (lo + hi) / 2;
     if (!anyScaledNodesOverlap(topics, dims, mid)) lo = mid;
     else hi = mid;

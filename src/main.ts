@@ -37,6 +37,12 @@ type EmbedInteractionState = {
   pendingFile: TFile | null;
 };
 
+type PreparedEmbedPreview = {
+  map: MindMapData;
+  mtime: number;
+  svgMarkup: string;
+};
+
 export default class SimpleMindPreviewPlugin extends Plugin {
   settings: SimpleMindPluginSettings = DEFAULT_SETTINGS;
   private cache = new Map<string, CacheItem>();
@@ -68,14 +74,14 @@ export default class SimpleMindPreviewPlugin extends Plugin {
       id: "create-mindmap",
       name: "Create & insert new mindmap",
       editorCallback: async (editor, view) => {
-        await this.createMindmap(editor, view);
+        await this.createMindmap(editor, view as MarkdownView);
       }
     });
     this.addCommand({
       id: "create-mindmap-from-current-note-name",
       name: "Create & insert new mindmap (current note name)",
       editorCallback: async (editor, view) => {
-        await this.createMindmapFromCurrentNoteName(editor, view);
+        await this.createMindmapFromCurrentNoteName(editor, view as MarkdownView);
       }
     });
 
@@ -244,13 +250,25 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     return data;
   }
 
+  private async prepareEmbedPreview(file: TFile): Promise<PreparedEmbedPreview> {
+    const stat = await this.app.vault.adapter.stat(file.path);
+    const mtime = stat?.mtime ?? 0;
+    const map = await this.readMindMap(file);
+    await this.yieldToMain();
+    const svgMarkup = renderMindMapSvg(map, this.settings);
+    return { map, mtime, svgMarkup };
+  }
+
   private async refreshSmmxEmbedsForFile(file: TFile): Promise<void> {
     const hosts = Array.from(document.querySelectorAll<HTMLElement>("[data-simplemind-rendered]")).filter(
       (el) => el.getAttribute("data-simplemind-rendered") === file.path
     );
+    if (hosts.length === 0) return;
+
+    const prepared = await this.prepareEmbedPreview(file);
     for (let i = 0; i < hosts.length; i++) {
       if (i > 0) await this.yieldToMain();
-      await this.renderEmbed(hosts[i], file);
+      await this.renderEmbed(hosts[i], file, prepared);
     }
   }
 
@@ -307,7 +325,78 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     return controller.signal;
   }
 
-  private async renderEmbed(embedEl: HTMLElement, file: TFile): Promise<void> {
+  private mountPreparedEmbed(
+    embedEl: HTMLElement,
+    file: TFile,
+    prepared: PreparedEmbedPreview
+  ): void {
+    this.embedInteractionControllers.get(embedEl)?.abort();
+    embedEl.empty();
+    embedEl.addClass("simplemind-preview-host");
+
+    const header = embedEl.createDiv({ cls: "simplemind-header" });
+    const title = header.createDiv({ cls: "simplemind-title", text: file.basename });
+    title.setAttr("title", file.path);
+
+    const actions = header.createDiv({ cls: "simplemind-header-actions" });
+    const refreshBtn = actions.createEl("button", {
+      cls: "simplemind-refresh-button",
+      text: "Refresh"
+    });
+    refreshBtn.setAttr("title", "Reload the preview from disk");
+    refreshBtn.setAttr("aria-label", "Reload the preview from disk");
+    setIcon(refreshBtn, "refresh-ccw");
+    refreshBtn.onclick = () => {
+      embedEl.removeAttribute("data-simplemind-rendered");
+      embedEl.removeAttribute("data-simplemind-mtime");
+      void this.runWhenIdle(() => this.renderEmbed(embedEl, file));
+    };
+
+    const copyMarkdownBtn = actions.createEl("button", {
+      cls: "simplemind-copy-markdown-button",
+      text: "Copy as markdown"
+    });
+    copyMarkdownBtn.setAttr(
+      "title",
+      "Markdown export: nested heading outline of this mindmap (e.g. for LLMs or other tools)"
+    );
+    copyMarkdownBtn.setAttr(
+      "aria-label",
+      "Copy markdown export of this mindmap to the clipboard"
+    );
+    setIcon(copyMarkdownBtn, "copy");
+    copyMarkdownBtn.onclick = async () => {
+      try {
+        const text = exportMindMapToMarkdown(prepared.map, { title: file.basename });
+        await navigator.clipboard.writeText(text);
+        new Notice("Copied markdown export to clipboard");
+      } catch {
+        new Notice("Copy failed");
+      }
+    };
+
+    const button = actions.createEl("button", {
+      cls: "simplemind-open-button",
+      text: "Open in SimpleMind"
+    });
+    button.setAttr("title", "Open this file in SimpleMind Pro");
+    button.setAttr("aria-label", "Open this file in SimpleMind Pro");
+    setIcon(button, "external-link");
+    button.onclick = async () => this.openInSimpleMind(file);
+
+    const preview = embedEl.createDiv({ cls: "simplemind-preview" });
+    preview.innerHTML = prepared.svgMarkup;
+    this.attachZoomInteractions(embedEl, preview, file);
+
+    embedEl.setAttribute("data-simplemind-rendered", file.path);
+    embedEl.setAttribute("data-simplemind-mtime", String(prepared.mtime));
+  }
+
+  private async renderEmbed(
+    embedEl: HTMLElement,
+    file: TFile,
+    preparedPreview?: PreparedEmbedPreview
+  ): Promise<void> {
     const gen = (this.embedRenderGen.get(embedEl) ?? 0) + 1;
     this.embedRenderGen.set(embedEl, gen);
 
@@ -332,71 +421,21 @@ export default class SimpleMindPreviewPlugin extends Plugin {
     embedEl.addClass("simplemind-preview-host");
 
     try {
-      const map = await this.readMindMap(file);
+      const prepared = preparedPreview ?? (await this.prepareEmbedPreview(file));
       if (this.embedRenderGen.get(embedEl) !== gen) return;
 
       const statAfter = await this.app.vault.adapter.stat(file.path);
       if (this.embedRenderGen.get(embedEl) !== gen) return;
 
       const mtimeForAttr = statAfter?.mtime ?? 0;
+      if (mtimeForAttr !== prepared.mtime) {
+        await this.yieldToMain();
+        if (this.embedRenderGen.get(embedEl) !== gen) return;
+        void this.runWhenIdle(() => this.renderEmbed(embedEl, file));
+        return;
+      }
 
-      const header = embedEl.createDiv({ cls: "simplemind-header" });
-      const title = header.createDiv({ cls: "simplemind-title", text: file.basename });
-      title.setAttr("title", file.path);
-
-      const actions = header.createDiv({ cls: "simplemind-header-actions" });
-      const refreshBtn = actions.createEl("button", {
-        cls: "simplemind-refresh-button",
-        text: "Refresh"
-      });
-      refreshBtn.setAttr("title", "Reload the preview from disk");
-      refreshBtn.setAttr("aria-label", "Reload the preview from disk");
-      setIcon(refreshBtn, "refresh-ccw");
-      refreshBtn.onclick = () => {
-        embedEl.removeAttribute("data-simplemind-rendered");
-        embedEl.removeAttribute("data-simplemind-mtime");
-        void this.renderEmbed(embedEl, file);
-      };
-
-      const copyMarkdownBtn = actions.createEl("button", {
-        cls: "simplemind-copy-markdown-button",
-        text: "Copy as markdown"
-      });
-      copyMarkdownBtn.setAttr(
-        "title",
-        "Markdown export: nested heading outline of this mindmap (e.g. for LLMs or other tools)"
-      );
-      copyMarkdownBtn.setAttr(
-        "aria-label",
-        "Copy markdown export of this mindmap to the clipboard"
-      );
-      setIcon(copyMarkdownBtn, "copy");
-      copyMarkdownBtn.onclick = async () => {
-        try {
-          const map = await this.readMindMap(file);
-          const text = exportMindMapToMarkdown(map, { title: file.basename });
-          await navigator.clipboard.writeText(text);
-          new Notice("Copied markdown export to clipboard");
-        } catch {
-          new Notice("Copy failed");
-        }
-      };
-
-      const button = actions.createEl("button", {
-        cls: "simplemind-open-button",
-        text: "Open in SimpleMind"
-      });
-      button.setAttr("title", "Open this file in SimpleMind Pro");
-      button.setAttr("aria-label", "Open this file in SimpleMind Pro");
-      setIcon(button, "external-link");
-      button.onclick = async () => this.openInSimpleMind(file);
-
-      const preview = embedEl.createDiv({ cls: "simplemind-preview" });
-      preview.innerHTML = renderMindMapSvg(map, this.settings);
-      this.attachZoomInteractions(embedEl, preview, file);
-
-      embedEl.setAttribute("data-simplemind-rendered", file.path);
-      embedEl.setAttribute("data-simplemind-mtime", String(mtimeForAttr));
+      this.mountPreparedEmbed(embedEl, file, prepared);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       embedEl.createDiv({ cls: "simplemind-error", text: `Failed to preview ${file.name}: ${message}` });
@@ -640,10 +679,10 @@ export default class SimpleMindPreviewPlugin extends Plugin {
 
   private escapeXmlAttribute(input: string): string {
     return input
-      .replaceAll("&", "&amp;")
-      .replaceAll("\"", "&quot;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
+      .replace(/&/g, "&amp;")
+      .replace(/\"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
   private async promptMindmapName(): Promise<string | null> {
@@ -700,7 +739,7 @@ export default class SimpleMindPreviewPlugin extends Plugin {
 
       const xmlText = await xmlFile.async("text");
       const escapedName = this.escapeXmlAttribute(rawName.trim());
-      const updatedXml = xmlText.replaceAll("-----", escapedName);
+      const updatedXml = xmlText.replace(/-----/g, escapedName);
       zip.file("document/mindmap.xml", updatedXml);
 
       const zippedData = await zip.generateAsync({ type: "uint8array" });

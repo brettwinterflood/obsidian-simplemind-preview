@@ -60,11 +60,10 @@ export class SimpleMindSettingsTab extends PluginSettingTab {
           .addOption("pastel", "Pastel fill")
           .addOption("outline", "Outline")
           .setValue(this.plugin.settings.nodeTheme)
-          .onChange(async (value: "pastel" | "outline") => {
-            this.plugin.settings.nodeTheme = value;
+          .onChange(async (value) => {
+            this.plugin.settings.nodeTheme = value as "pastel" | "outline";
             await this.plugin.saveSettings();
           })
       );
-
   }
 }
